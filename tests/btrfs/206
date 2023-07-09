@@ -14,6 +14,11 @@
 . ./common/preamble
 _begin_fstest auto quick log replay recoveryloop punch prealloc
 
+_cleanup()
+{
+	_log_writes_cleanup
+}
+
 # Import common functions.
 . ./common/filter
 . ./common/dmlogwrites

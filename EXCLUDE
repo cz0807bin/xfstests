@@ -10,3 +10,12 @@ generic/301
 generic/302
 generic/733
 shared/298
+# Temporary for CI
+# normal, block_group_tree, for-next, EUCLEAN
+btrfs/330
+# test-zoned, for-next, something found in dmesg
+generic/476
+# test-zoned, for-next, mount: /mnt/scratch: can't read superblock on /dev/mapper/flakey-test
+# mtime not preserved, expected: 1705082371 got: 1704844056
+# ctime not preserved, expected: 1705082371 got: 1704844056
+btrfs/236

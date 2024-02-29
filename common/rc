@@ -5432,6 +5432,10 @@ _require_unshare() {
 		_notrun "unshare $*: command not found, should be in util-linux"
 }
 
+_require_parted() {
+	$PARTED_PROG --list &>/dev/null || _notrun "parted: command not found"
+}
+
 # Return a random file in a directory. A directory is *not* followed
 # recursively.
 _random_file() {

@@ -1,0 +1,127 @@
+#! /bin/bash
+# SPDX-License-Identifier: GPL-2.0
+# Copyright (C) 2024 Meta, Inc. All Rights Reserved.
+#
+# FS QA Test 603
+#
+# Test an edge case of multi device volume management in btrfs.
+# If a device changes devt between mounts of a multi device fs, we can trick
+# btrfs into mounting the same device twice fully (not as a bind mount). From
+# there, it is trivial to induce corruption.
+#
+. ./common/preamble
+_begin_fstest auto quick volume
+
+# Override the default cleanup function.
+# _cleanup()
+# {
+# 	cd /
+# 	rm -r -f $tmp.*
+# }
+
+# Import common functions.
+# . ./common/filter
+
+# real QA test starts here
+
+# Modify as appropriate.
+_supported_fs btrfs
+_require_test
+_require_parted
+
+#BARE_MOUNT_PROG=$here/src/bare-mount
+
+_cleanup() {
+	cd /
+	umount $MNT
+	umount $BIND
+	losetup -d $DEV0
+	losetup -d $DEV1
+	losetup -d $DEV2
+	rm $IMG0
+	rm $IMG1
+	rm $IMG2
+}
+
+do_mkpart() {
+	local dev=$1
+	$PARTED_PROG $dev 'mkpart mypart 1M 100%' --script
+}
+
+do_rmpart() {
+	local dev=$1
+	$PARTED_PROG $dev 'rm 1' --script
+}
+
+# Prepare 3 loop devices on the test device
+IMG0=$TEST_DIR/$$.img0
+IMG1=$TEST_DIR/$$.img1
+IMG2=$TEST_DIR/$$.img2
+truncate -s 1G $IMG0
+truncate -s 1G $IMG1
+truncate -s 1G $IMG2
+DEV0=$(losetup -f $IMG0 --show)
+DEV1=$(losetup -f $IMG1 --show)
+DEV2=$(losetup -f $IMG2 --show)
+D0P1=$DEV0"p1"
+D1P1=$DEV1"p1"
+MNT=$TEST_DIR/mnt
+BIND=$TEST_DIR/bind
+
+# Setup partition table with one partition on each device
+$PARTED_PROG $DEV0 'mktable gpt' --script
+$PARTED_PROG $DEV1 'mktable gpt' --script
+do_mkpart $DEV0
+do_mkpart $DEV1
+
+# mkfs with two devices to avoid clearing devices on close
+# single raid to allow removing DEV2
+$MKFS_BTRFS_PROG -f -msingle -dsingle $D0P1 $DEV2 &>/dev/null
+
+# Cycle mount the two device fs to populate both devices into the
+# stale device cache
+mkdir -p $MNT
+mount $D0P1 $MNT
+umount $MNT
+
+# Swap the partition dev_ts. This leaves the dev_t in the cache out of date.
+do_rmpart $DEV0
+do_rmpart $DEV1
+do_mkpart $DEV1
+do_mkpart $DEV0
+
+# Mount with mismatched dev_t!
+mount $D0P1 $MNT || _fail "failed to remount; don't proceed and do dangerous stuff on raw mount point"
+
+# Remove extra device to bring temp-fsid back in the fray
+$BTRFS_UTIL_PROG device remove $DEV2 $MNT
+
+# Create the should be bind mount
+mkdir -p $BIND
+mount $D0P1 $BIND
+mount_show=$($BTRFS_UTIL_PROG filesystem show $MNT)
+bind_show=$($BTRFS_UTIL_PROG filesystem show $BIND)
+# If they're different, we are in trouble.
+[ "$mount_show" = "$bind_show" ] || echo "$mount_show != $bind_show"
+
+# now prove it by corrupting it
+for i in $(seq 20); do
+	# TODO diff prog
+	dd if=/dev/urandom of=$MNT/foo.$i bs=50M count=1 &>/dev/null
+done
+for i in $(seq 20); do
+	# TODO diff prog
+	dd if=/dev/urandom of=$BIND/foo.$i bs=50M count=1 &>/dev/null
+done
+sync
+find $BIND -type f -delete
+sync
+$FSTRIM_PROG $BIND
+sleep 5
+echo 3 > /proc/sys/vm/drop_caches
+$BTRFS_UTIL_PROG scrub start -B $MNT >>$seqres.full 2>&1
+
+# success, all done
+echo "Silence is golden"
+status=0
+exit
